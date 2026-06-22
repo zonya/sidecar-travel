@@ -7,7 +7,7 @@ cask "sidecar-travel" do
   desc "Auto-connect an iPad as a headless Mac's display via Sidecar"
   homepage "https://github.com/zonya/sidecar-travel"
 
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Sidecar Travel.app"
 
