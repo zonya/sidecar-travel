@@ -1,6 +1,6 @@
 cask "sidecar-travel" do
   version "1.0.0"
-  sha256 "REPLACE_WITH_RELEASE_SHA256"
+  sha256 "ff4f7ad9860db3f7ea4f28abce2a7a61ba4edfed23c50095619a7dda5bfac2af"
 
   url "https://github.com/zonya/sidecar-travel/releases/download/v#{version}/Sidecar-Travel.zip"
   name "Sidecar Travel"
