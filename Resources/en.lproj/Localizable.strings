@@ -1,0 +1,21 @@
+/* Sidecar Travel — English (base language) */
+"app.subtitle" = "Turn your iPad into a Mac display on the go";
+"device.label" = "iPad";
+"device.none" = "No iPad found — plug it in via USB";
+"row.connected" = "iPad connected";
+"row.available" = "iPad available";
+"row.trigger" = "Auto-connect trigger installed";
+"autologin.title" = "Auto-login (%@)";
+"autologin.subtitle" = "Logs in without a screen after power-on";
+"armed.title" = "Sidecar on plug";
+"armed.subtitle" = "Connects automatically when you plug in the iPad";
+"btn.connect" = "Connect iPad now";
+"btn.disconnect" = "Disconnect iPad";
+"btn.refresh" = "Refresh";
+"btn.installTrigger" = "Install trigger";
+"btn.removeTrigger" = "Remove trigger";
+"ready" = "✓ Ready to travel — power off, take it, then power on and plug in the iPad.";
+"yes" = "YES";
+"no" = "no";
+"alert.nokc.title" = "Auto-login was never set up";
+"alert.nokc.body" = "Do this once while you have a screen:\nSystem Settings → Users & Groups → \"Automatically log in as\" → %@.\nThen this switch will work.";

@@ -1,0 +1,21 @@
+/* Sidecar Travel — srpski */
+"app.subtitle" = "Pretvori iPad u Mac ekran na putu";
+"device.label" = "iPad";
+"device.none" = "Nema iPada — ukucaj ga USB kablom";
+"row.connected" = "iPad povezan";
+"row.available" = "iPad vidljiv";
+"row.trigger" = "Okidač za auto-spajanje instaliran";
+"autologin.title" = "Auto-login (%@)";
+"autologin.subtitle" = "Diže sesiju bez ekrana posle paljenja";
+"armed.title" = "Sidecar na kabl";
+"armed.subtitle" = "Čim ukucaš iPad — sam se zakači kao ekran";
+"btn.connect" = "Poveži iPad sad";
+"btn.disconnect" = "Otkači iPad";
+"btn.refresh" = "Osveži";
+"btn.installTrigger" = "Instaliraj okidač";
+"btn.removeTrigger" = "Ukloni okidač";
+"ready" = "✓ Spreman za put — ugasi, ponesi, na licu mesta upali i ukucaj iPad.";
+"yes" = "DA";
+"no" = "ne";
+"alert.nokc.title" = "Auto-login nije nikad podešen";
+"alert.nokc.body" = "Uradi JEDNOM dok imaš ekran:\nSystem Settings → Users & Groups → \"Automatically log in as\" → %@.\nPosle toga ovaj prekidač radi.";
