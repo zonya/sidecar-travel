@@ -9,6 +9,14 @@
 "autologin.subtitle" = "Diže sesiju bez ekrana posle paljenja";
 "armed.title" = "Sidecar na kabl";
 "armed.subtitle" = "Čim ukucaš iPad — sam se zakači kao ekran";
+"keep.title" = "Drži ekran kad nema monitora";
+"keep.subtitle" = "Drži virtuelni ekran da VNC ne bude crn. Miruje dok je monitor u HDMI.";
+"keep.needsBD" = "Traži BetterDisplay — instaliraj ga, pa uključi ovo.";
+"keep.idle" = "Monitor prikačen — miruje, ne dira ekrane.";
+"keep.active" = "Bez monitora — virtuelni ekran radi.";
+"keep.waiting" = "Bez monitora — dižem virtuelni ekran…";
+"login.title" = "Pokreni pri loginu";
+"login.subtitle" = "Diže se u pozadini posle restarta, da ekran postoji pre tebe";
 "btn.connect" = "Poveži iPad sad";
 "btn.disconnect" = "Otkači iPad";
 "btn.refresh" = "Osveži";

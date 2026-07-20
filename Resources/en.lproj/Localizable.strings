@@ -9,6 +9,14 @@
 "autologin.subtitle" = "Logs in without a screen after power-on";
 "armed.title" = "Sidecar on plug";
 "armed.subtitle" = "Connects automatically when you plug in the iPad";
+"keep.title" = "Keep a screen when headless";
+"keep.subtitle" = "Holds a virtual display so screen sharing isn't black. Idle while a monitor is plugged in.";
+"keep.needsBD" = "Needs BetterDisplay — install it, then switch this on.";
+"keep.idle" = "Monitor detected — keeper is idle, not touching your displays.";
+"keep.active" = "Headless — virtual screen is up.";
+"keep.waiting" = "Headless — bringing the virtual screen up…";
+"login.title" = "Run at login";
+"login.subtitle" = "Starts in the background after reboot, so the screen is there before you are";
 "btn.connect" = "Connect iPad now";
 "btn.disconnect" = "Disconnect iPad";
 "btn.refresh" = "Refresh";

@@ -10,6 +10,14 @@ let AGENT_LABEL = "io.github.sidecartravel.plug"
 let AGENT_PLIST = HOME + "/Library/LaunchAgents/\(AGENT_LABEL).plist"
 let APPLE_VID = 1452                                    // 0x05AC, Apple
 
+// Headless screen keeper
+let KEEP_FILE = SUPPORT + "/keepscreen"
+let KEEP_LOG = SUPPORT + "/screen.log"
+let SCREEN_NAME = "TravelScreen"
+let LOGIN_LABEL = "io.github.sidecartravel.app"
+let LOGIN_PLIST = HOME + "/Library/LaunchAgents/\(LOGIN_LABEL).plist"
+let BG_FLAG = "--background"
+
 // ctl.js lives in the app bundle; a copy is installed to SUPPORT for the launch agent.
 let CTL_BUNDLE = Bundle.main.path(forResource: "ctl", ofType: "js") ?? ""
 let CTL_INSTALLED = SUPPORT + "/ctl.js"
@@ -76,6 +84,11 @@ struct AppState {
     var autologin = false
     var armed = false
     var agentLoaded = false
+    var keepScreen = false
+    var bdAvailable = false
+    var physicalCount = 0
+    var screenAttached = false
+    var loginAgent = false
     var ipadConnected: Bool { !device.isEmpty && connected.contains(device) }
     var ipadVisible: Bool { !device.isEmpty && devices.contains(device) }
 }
@@ -89,6 +102,11 @@ func readState() -> AppState {
     s.autologin = sh("/usr/bin/defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null") == ME
     s.armed = FileManager.default.fileExists(atPath: ARMED)
     s.agentLoaded = sh("/bin/launchctl print gui/$(id -u)/\(AGENT_LABEL) 2>/dev/null | grep -c 'state = '") != "0"
+    s.keepScreen = ScreenKeeper.shared.enabled
+    s.bdAvailable = bdPath() != nil
+    s.physicalCount = s.bdAvailable ? physicalDisplayCount() : onlineDisplays().count
+    s.screenAttached = s.bdAvailable && travelScreenAttached()
+    s.loginAgent = loginAgentInstalled()
     return s
 }
 
@@ -177,6 +195,228 @@ func removeTrigger() {
     try? FileManager.default.removeItem(atPath: AGENT_PLIST)
 }
 
+// MARK: - Headless screen keeper
+//
+// Without any display attached a Mac has no framebuffer, so screen sharing shows black.
+// The fix is a BetterDisplay virtual screen that stands in for the missing monitor.
+//
+// The hard part is knowing WHEN to do that. An earlier version of this ran on a 5-minute
+// timer and blindly re-attached the virtual screen. Every attach is a display
+// reconfiguration, so a real monitor plugged into HDMI would re-sync its picture every
+// 5 minutes, forever. The timer is gone: we react to display changes instead, and we do
+// nothing at all while a physical monitor is present.
+
+let BD_CANDIDATES = ["/usr/local/bin/betterdisplaycli", "/opt/homebrew/bin/betterdisplaycli"]
+let SIDECAR_VENDOR: UInt32 = 1633775724                 // 'aapl' — Sidecar/AirPlay displays
+
+func bdPath() -> String? { BD_CANDIDATES.first { FileManager.default.isExecutableFile(atPath: $0) } }
+
+func klog(_ msg: String) {
+    let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    let line = "\(df.string(from: Date())) \(msg)\n"
+    ensureSupportDir()
+    if let h = FileHandle(forWritingAtPath: KEEP_LOG) {
+        h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close()
+    } else {
+        try? line.write(toFile: KEEP_LOG, atomically: true, encoding: .utf8)
+    }
+}
+
+@discardableResult
+func bd(_ args: String) -> String {
+    guard let cli = bdPath() else { return "" }
+    return sh("'\(cli)' \(args) 2>/dev/null")
+}
+
+struct BDDevice { let name: String; let type: String; let displayID: CGDirectDisplayID }
+
+// `betterdisplaycli get --identifiers` prints comma-separated JSON objects, not a JSON
+// array — wrap it before decoding.
+func bdDevices() -> [BDDevice] {
+    let out = bd("get --identifiers")
+    guard !out.isEmpty, let data = ("[" + out + "]").data(using: .utf8),
+          let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+    else { return [] }
+    return arr.map { d in
+        BDDevice(name: d["name"] as? String ?? "",
+                 type: d["deviceType"] as? String ?? "",
+                 displayID: CGDirectDisplayID(Int(d["displayID"] as? String ?? "0") ?? 0))
+    }
+}
+
+// BD answers the CLI only once it is fully up; "Default Group" always exists when it is.
+func bdReady() -> Bool { bdDevices().contains { $0.type == "DisplayGroup" } }
+
+func bdRunning() -> Bool {
+    !sh("/usr/bin/pgrep -f 'BetterDisplay.app/Contents/MacOS/BetterDisplay'").isEmpty
+}
+
+func onlineDisplays() -> [CGDirectDisplayID] {
+    var count: UInt32 = 0
+    CGGetOnlineDisplayList(16, nil, &count)
+    guard count > 0 else { return [] }
+    var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+    CGGetOnlineDisplayList(count, &ids, &count)
+    return Array(ids.prefix(Int(count)))
+}
+
+// A real monitor = an online display that is neither one of BD's virtual screens nor a
+// Sidecar/AirPlay display. If BD isn't ready we can't identify its virtual screens, so its
+// screen counts as physical — that errs toward doing nothing, which is the safe direction.
+func physicalDisplayCount() -> Int {
+    let virtual = Set(bdDevices().filter { $0.type == "VirtualScreen" && $0.displayID != 0 }.map(\.displayID))
+    return onlineDisplays().filter { !virtual.contains($0) && CGDisplayVendorNumber($0) != SIDECAR_VENDOR }.count
+}
+
+// displayID is 0 while a virtual screen exists but is detached.
+func travelScreens() -> [BDDevice] { bdDevices().filter { $0.type == "VirtualScreen" && $0.name == SCREEN_NAME } }
+func travelScreenAttached() -> Bool { travelScreens().contains { $0.displayID != 0 } }
+
+// Mirroring a virtual screen onto Sidecar costs ~40% CPU in BD plus ~70% in WindowServer on
+// an Intel GPU, and flickers. Keep every display extended instead. No-op if nothing mirrors.
+func breakMirror() {
+    let ids = onlineDisplays()
+    guard ids.count >= 2, ids.contains(where: { CGDisplayMirrorsDisplay($0) != kCGNullDirectDisplay }) else { return }
+    var cfg: CGDisplayConfigRef?
+    CGBeginDisplayConfiguration(&cfg)
+    for id in ids { CGConfigureDisplayMirrorOfDisplay(cfg, id, kCGNullDirectDisplay) }
+    let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+    klog("broke mirror (err=\(err.rawValue))")
+}
+
+private func reconfigCallback(_ display: CGDirectDisplayID,
+                              _ flags: CGDisplayChangeSummaryFlags,
+                              _ userInfo: UnsafeMutableRawPointer?) {
+    // Ignore the "about to change" half of every event pair — act on the settled state.
+    guard !flags.contains(.beginConfigurationFlag) else { return }
+    ScreenKeeper.shared.schedule("display change")
+}
+
+final class ScreenKeeper {
+    static let shared = ScreenKeeper()
+    private let q = DispatchQueue(label: "io.github.sidecartravel.keeper")
+    private var pending: DispatchWorkItem?
+    private var registered = false
+    private var working = false                          // our own attach/detach re-enters the callback
+
+    var enabled: Bool { FileManager.default.fileExists(atPath: KEEP_FILE) }
+
+    func setEnabled(_ on: Bool) {
+        ensureSupportDir()
+        if on {
+            FileManager.default.createFile(atPath: KEEP_FILE, contents: nil)
+            klog("keeper enabled")
+            start()
+            schedule("enabled", delay: 0)
+        } else {
+            try? FileManager.default.removeItem(atPath: KEEP_FILE)
+            klog("keeper disabled")
+        }
+    }
+
+    func start() {
+        guard !registered else { return }
+        CGDisplayRegisterReconfigurationCallback(reconfigCallback, nil)
+        registered = true
+        // Cover boot: BetterDisplay can come up after we do, and that may not raise an event.
+        schedule("startup", delay: 5)
+    }
+
+    // Display changes arrive in bursts (unplug fires several); collapse them.
+    func schedule(_ reason: String, delay: TimeInterval = 3) {
+        guard enabled else { return }
+        pending?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.reconcile(reason) }
+        pending = item
+        q.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func reconcile(_ reason: String) {
+        guard enabled, !working, bdPath() != nil else { return }
+        working = true
+        defer { working = false }
+
+        if !bdRunning() {
+            klog("[\(reason)] BetterDisplay not running -> launching")
+            sh("/usr/bin/open -ga BetterDisplay")
+        }
+        // Never decide anything until BD confirms it is up: asking too early returns an empty
+        // list, which used to read as "no virtual screen" and spawn duplicate ghost screens.
+        for _ in 0..<30 {
+            if bdReady() { break }
+            Thread.sleep(forTimeInterval: 2)
+        }
+        guard bdReady() else {
+            klog("[\(reason)] BetterDisplay silent after 60s -> leaving displays alone")
+            return
+        }
+
+        // A real monitor is doing the job — stay out of the way. This is the branch that
+        // makes the app safe to leave switched on at home.
+        if physicalDisplayCount() > 0 {
+            if travelScreenAttached() {
+                klog("[\(reason)] physical monitor present -> detaching \(SCREEN_NAME)")
+                bd("set --name=\(SCREEN_NAME) --connected=off")
+            }
+            return
+        }
+
+        // Headless: make sure exactly one virtual screen exists and is attached.
+        let existing = travelScreens()
+        if existing.count > 1 {
+            klog("[\(reason)] \(existing.count) ghost virtual screens -> clearing")
+            bd("discard --type=VirtualScreen")
+            Thread.sleep(forTimeInterval: 4)
+        }
+        if travelScreens().isEmpty {
+            klog("[\(reason)] no \(SCREEN_NAME) -> creating")
+            // 15:11 matches the iPad's native 1920x1408; a 16:9 screen letterboxes on it.
+            bd("create --type=VirtualScreen --virtualScreenName=\(SCREEN_NAME) "
+               + "--aspectWidth=15 --aspectHeight=11 --useResolutionList=on "
+               + "--resolutionList=1920x1408,1440x1056,1020x748")
+            Thread.sleep(forTimeInterval: 5)
+        }
+        if !travelScreenAttached() {
+            klog("[\(reason)] \(SCREEN_NAME) detached -> attaching")
+            bd("set --name=\(SCREEN_NAME) --connected=on")
+            Thread.sleep(forTimeInterval: 4)
+        }
+        // Resolution is deliberately left alone: when Sidecar is live the iPad dictates
+        // scaling, and forcing a mode here would tear the picture on the iPad.
+        breakMirror()
+    }
+}
+
+// MARK: - Run at login
+// A LaunchAgent rather than SMAppService: this bundle is ad-hoc signed, and the keeper has
+// to be running before anyone can see a screen to launch it by hand.
+func loginAgentInstalled() -> Bool { FileManager.default.fileExists(atPath: LOGIN_PLIST) }
+
+func installLoginAgent() {
+    let exe = Bundle.main.executablePath ?? ""
+    let plist = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+      <key>Label</key><string>\(LOGIN_LABEL)</string>
+      <key>ProgramArguments</key>
+      <array><string>\(exe)</string><string>\(BG_FLAG)</string></array>
+      <key>RunAtLoad</key><true/>
+      <key>KeepAlive</key>
+      <dict><key>SuccessfulExit</key><false/></dict>
+    </dict>
+    </plist>
+    """
+    try? plist.write(toFile: LOGIN_PLIST, atomically: true, encoding: .utf8)
+    sh("/bin/launchctl bootout gui/$(id -u)/\(LOGIN_LABEL) 2>/dev/null; /bin/launchctl bootstrap gui/$(id -u) '\(LOGIN_PLIST)' 2>/dev/null")
+}
+
+func removeLoginAgent() {
+    sh("/bin/launchctl bootout gui/$(id -u)/\(LOGIN_LABEL) 2>/dev/null")
+    try? FileManager.default.removeItem(atPath: LOGIN_PLIST)
+}
+
 // MARK: - Views
 struct Row: View {
     let label: String; let on: Bool
@@ -263,6 +503,42 @@ struct ContentView: View {
                 }
             }.toggleStyle(.switch)
 
+            Divider()
+
+            Toggle(isOn: Binding(get: { st.keepScreen }, set: { v in
+                ScreenKeeper.shared.setEnabled(v)
+                refresh()
+            })) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L("keep.title")).font(.system(size: 13, weight: .medium))
+                    Text(L("keep.subtitle")).font(.system(size: 10)).foregroundColor(.secondary)
+                }
+            }.toggleStyle(.switch).disabled(!st.bdAvailable)
+
+            if !st.bdAvailable {
+                Text(L("keep.needsBD")).font(.system(size: 10)).foregroundColor(.orange)
+            } else if st.keepScreen {
+                // Spell out which branch the keeper is in — the whole point is that it stays
+                // idle while a monitor is attached, and that is otherwise invisible.
+                Text(st.physicalCount > 0
+                     ? L("keep.idle")
+                     : (st.screenAttached ? L("keep.active") : L("keep.waiting")))
+                    .font(.system(size: 10))
+                    .foregroundColor(st.physicalCount > 0 ? .secondary : .green)
+            }
+
+            Toggle(isOn: Binding(get: { st.loginAgent }, set: { v in
+                if v { installLoginAgent() } else { removeLoginAgent() }
+                refresh()
+            })) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L("login.title")).font(.system(size: 13, weight: .medium))
+                    Text(L("login.subtitle")).font(.system(size: 10)).foregroundColor(.secondary)
+                }
+            }.toggleStyle(.switch)
+
+            Divider()
+
             HStack {
                 Button(st.agentLoaded ? L("btn.removeTrigger") : L("btn.installTrigger")) {
                     busy = true
@@ -298,7 +574,27 @@ struct ContentView: View {
     }
 }
 
+// MARK: - App
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var isBackground: Bool { CommandLine.arguments.contains(BG_FLAG) }
+
+    func applicationDidFinishLaunching(_ note: Notification) {
+        ScreenKeeper.shared.start()
+        if Self.isBackground {
+            // Launched at login with no one watching: no Dock icon, no window, just the keeper.
+            NSApp.setActivationPolicy(.accessory)
+            DispatchQueue.main.async { NSApp.windows.forEach { $0.close() } }
+        }
+    }
+
+    // Closing the window must not kill the keeper it was configuring.
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool {
+        !ScreenKeeper.shared.enabled
+    }
+}
+
 @main struct SidecarTravelApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
         WindowGroup { ContentView() }.windowResizability(.contentSize)
     }

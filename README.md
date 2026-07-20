@@ -16,8 +16,14 @@ A tiny SwiftUI menu app that wires up macOS Sidecar for headless/travel use:
   USB and starts Sidecar automatically.
 - **Auto-login** — optionally enables macOS auto-login for the current user, so the Mac
   boots straight into your session with no screen attached.
-- **One window, three switches** — see iPad status, arm/disarm the trigger, toggle
-  auto-login, connect/disconnect on demand.
+- **Keep a screen when headless** — a Mac with no display has no framebuffer, so screen
+  sharing (VNC) shows black and there's nothing for Sidecar to extend. This option holds
+  a [BetterDisplay](https://github.com/waydabber/BetterDisplay) virtual screen alive so
+  there's always a picture. It **reacts to display changes instead of polling**, and stays
+  completely idle while a real monitor is plugged in — so you can leave it on at home
+  without your HDMI monitor re-syncing every few minutes.
+- **Run at login** — starts the app in the background after a reboot, so the screen exists
+  before you're there to open anything.
 
 ## Status panel
 
@@ -26,6 +32,7 @@ A tiny SwiftUI menu app that wires up macOS Sidecar for headless/travel use:
 | iPad connected | Sidecar session is active on the selected iPad |
 | iPad available | iPad is reachable and can be connected |
 | Auto-connect trigger installed | the `launchd` agent is loaded |
+| Keeper idle / active | whether the screen keeper is standing back (monitor present) or holding a virtual screen (headless) |
 
 ## Requirements
 
@@ -34,6 +41,8 @@ A tiny SwiftUI menu app that wires up macOS Sidecar for headless/travel use:
   over Wi-Fi/USB the normal way.
 - For headless boot: **FileVault off** (so the Mac can boot without typing a password)
   and auto-login set once via System Settings.
+- For "keep a screen when headless": **[BetterDisplay](https://github.com/waydabber/BetterDisplay)**
+  installed (`brew install --cask betterdisplay`). Optional — the rest works without it.
 
 ## Install
 
@@ -78,7 +87,15 @@ When both auto-login and the trigger are armed you'll see **"Ready to travel."**
 - The app writes a `LaunchAgent` plist with an **IOKit USB matching** rule on your iPad
   (Apple vendor id + the iPad's product id, auto-detected). On plug, `on-plug.sh` runs,
   checks the armed flag and device, and connects.
-- Config lives in `~/Library/Application Support/SidecarTravel/`.
+- The **screen keeper** registers a `CGDisplayRegisterReconfigurationCallback` and, on
+  each settled display change, decides in one place: if a physical monitor is online
+  (any display that isn't a BetterDisplay virtual screen or a Sidecar/AirPlay display) it
+  does nothing; otherwise it ensures exactly one attached virtual screen and breaks any
+  mirror. No timer, so nothing happens on its own while you're plugged into a monitor.
+- **Run at login** is a second `LaunchAgent` that launches the app with `--background`
+  (accessory activation policy, no window, `KeepAlive`).
+- Config lives in `~/Library/Application Support/SidecarTravel/` (`keepscreen` flag,
+  `screen.log`).
 
 ## Caveats
 
