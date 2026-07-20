@@ -17,6 +17,7 @@ let SCREEN_NAME = "TravelScreen"
 let LOGIN_LABEL = "io.github.sidecartravel.app"
 let LOGIN_PLIST = HOME + "/Library/LaunchAgents/\(LOGIN_LABEL).plist"
 let BG_FLAG = "--background"
+let FIXUP_FLAG = "--fixup"                              // post-connect: break mirror + pin Sidecar res
 
 // ctl.js lives in the app bundle; a copy is installed to SUPPORT for the launch agent.
 let CTL_BUNDLE = Bundle.main.path(forResource: "ctl", ofType: "js") ?? ""
@@ -134,6 +135,7 @@ func installTrigger() -> String {
     // copy ctl.js + write on-plug.sh into SUPPORT so the agent path is stable regardless of .app location
     try? FileManager.default.removeItem(atPath: CTL_INSTALLED)
     try? FileManager.default.copyItem(atPath: CTL_BUNDLE, toPath: CTL_INSTALLED)
+    let exe = Bundle.main.executablePath ?? ""
     let plug = """
     #!/bin/bash
     DIR="$HOME/Library/Application Support/SidecarTravel"
@@ -141,11 +143,14 @@ func installTrigger() -> String {
     DEV=$(cat "$DIR/device.txt" 2>/dev/null)
     [ -z "$DEV" ] && exit 0
     LOG="$DIR/plug.log"
-    if /usr/bin/osascript -l JavaScript "$DIR/ctl.js" list 2>/dev/null | grep -q "connected=\\[\\"$DEV\\"\\]"; then exit 0; fi
+    FIXUP="\(exe)"
+    # After connect: break the mirror Sidecar tends to set up and pin the iPad to 960x704.
+    fixup() { [ -x "$FIXUP" ] && "$FIXUP" \(FIXUP_FLAG) >> "$LOG" 2>&1; }
+    if /usr/bin/osascript -l JavaScript "$DIR/ctl.js" list 2>/dev/null | grep -q "connected=\\[\\"$DEV\\"\\]"; then fixup; exit 0; fi
     echo "$(date '+%F %T') iPad plugged -> connecting" >> "$LOG"
     for i in $(seq 1 30); do
       if /usr/bin/osascript -l JavaScript "$DIR/ctl.js" list 2>/dev/null | grep -q "connected=\\[\\"$DEV\\"\\]"; then
-        echo "  connected (try $i)" >> "$LOG"; exit 0
+        echo "  connected (try $i)" >> "$LOG"; sleep 1; fixup; exit 0
       fi
       /usr/bin/osascript -l JavaScript "$DIR/ctl.js" connect "$DEV" >/dev/null 2>&1
       sleep 2
@@ -282,6 +287,31 @@ func breakMirror() {
     for id in ids { CGConfigureDisplayMirrorOfDisplay(cfg, id, kCGNullDirectDisplay) }
     let err = CGCompleteDisplayConfiguration(cfg, .permanently)
     klog("broke mirror (err=\(err.rawValue))")
+}
+
+// When Sidecar attaches, macOS often picks 1152x720 (16:10) and letterboxes the 4:3 iPad.
+// Pin it to 960x704 HiDPI, which fills the panel minus sidebar + Touch Bar. Idempotent;
+// no-op if no Sidecar display is present or it's already correct. This is the one thing the
+// old auto-connect script did that the connect step alone doesn't, folded into the app.
+func pinSidecarResolution() {
+    for id in onlineDisplays() where CGDisplayVendorNumber(id) == SIDECAR_VENDOR {
+        if let cur = CGDisplayCopyDisplayMode(id), cur.width == 960, cur.height == 704 { continue }
+        let opts = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
+        guard let modes = CGDisplayCopyAllDisplayModes(id, opts) as? [CGDisplayMode] else { continue }
+        let want = modes.filter { $0.width == 960 && $0.height == 704 && $0.isUsableForDesktopGUI() }
+        guard let m = want.max(by: { $0.pixelWidth < $1.pixelWidth }) else { continue }
+        var cfg: CGDisplayConfigRef?
+        CGBeginDisplayConfiguration(&cfg)
+        CGConfigureDisplayWithDisplayMode(cfg, id, m, nil)
+        let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+        klog("pinned Sidecar \(m.width)x\(m.height) (err=\(err.rawValue))")
+    }
+}
+
+// Runs on `--fixup`, invoked by on-plug.sh right after a Sidecar connect.
+func runFixup() {
+    breakMirror()
+    pinSidecarResolution()
 }
 
 private func reconfigCallback(_ display: CGDirectDisplayID,
@@ -579,6 +609,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static var isBackground: Bool { CommandLine.arguments.contains(BG_FLAG) }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // One-shot: called by the auto-connect trigger after Sidecar attaches. Do the CG
+        // fixups and exit without ever showing UI.
+        if CommandLine.arguments.contains(FIXUP_FLAG) {
+            NSApp.setActivationPolicy(.prohibited)
+            runFixup()
+            exit(0)
+        }
         ScreenKeeper.shared.start()
         if Self.isBackground {
             // Launched at login with no one watching: no Dock icon, no window, just the keeper.
