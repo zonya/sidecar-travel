@@ -123,3 +123,10 @@ Serbian ship today. **PRs adding new languages are welcome** — copy `en.lproj`
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## ☕ Support
+
+This is a free project built in spare time. If it saved you an evening, you can
+[buy me a coffee](https://ko-fi.com/zonya2026).
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/zonya2026)
